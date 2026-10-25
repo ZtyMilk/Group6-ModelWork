@@ -1,0 +1,4 @@
+model_name_or_path: .model/models/Qwen--Qwen2.5-1.5B-Instruct/snapshots/master
+adapter_name_or_path: saves/persona_lora
+template: qwen
+finetuning_type: lora

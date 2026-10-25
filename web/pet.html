@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>.KIKI.</title>
+  <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+  <script src="/vendor/live2d.min.js"></script>
+  <script src="/vendor/live2dcubismcore.min.js"></script>
+  <script src="/vendor/pixi.min.js"></script>
+  <script src="/vendor/pixi-live2d-display.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+    html, body {
+      width: 100%; height: 100%; overflow: hidden;
+      background: transparent !important;
+      font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+
+    /* 头顶对话气泡 */
+    .bubble {
+      position: absolute; top: 6px; left: 50%; transform: translateX(-50%);
+      width: 94%; padding: 10px 14px;
+      background: rgba(20, 22, 35, 0.86);
+      border: 1px solid rgba(255, 133, 162, 0.55);
+      border-radius: 14px; color: #fff; font-size: 13px; line-height: 1.45;
+      box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
+      z-index: 10;
+      word-break: break-word;
+    }
+    .badge {
+      display: inline-block; font-size: 11px; color: #ff94b4;
+      margin-right: 6px; font-weight: bold;
+    }
+
+    /* Live2D 透明画布 */
+    #live2d-canvas {
+      position: absolute; top: 68px; left: 0;
+      width: 100%; height: calc(100% - 114px);
+      z-index: 2;
+    }
+
+    /* 底部迷你悬浮输入框 */
+    .mini-input {
+      position: absolute; bottom: 6px; left: 50%; transform: translateX(-50%);
+      width: 94%; display: flex; gap: 6px; z-index: 10;
+    }
+    .mini-input input {
+      flex: 1; padding: 8px 12px; border-radius: 16px;
+      border: 1px solid rgba(255, 255, 255, 0.25);
+      background: rgba(20, 22, 35, 0.85); color: #fff; font-size: 12px; outline: none;
+    }
+    .mini-input input:focus {
+      border-color: #ff85a2;
+    }
+    .mini-input button {
+      padding: 0 14px; border-radius: 16px; border: none;
+      background: linear-gradient(135deg, #ff758c, #ff7eb3);
+      color: #fff; font-size: 12px; font-weight: bold; cursor: pointer;
+    }
+    .mini-input button:disabled {
+      opacity: 0.5; cursor: not-allowed;
+    }
+  </style>
+</head>
+<body>
+  <div class="bubble">
+    <span class="badge" id="emotion">[傲娇 ❤️60%]</span>
+    <span id="reply-text">正在唤醒KIKI……</span>
+  </div>
+
+  <canvas id="live2d-canvas"></canvas>
+
+  <div class="mini-input">
+    <input id="msg" type="text" placeholder="Talking... (Enter)" />
+    <button id="btn" onclick="send()" disabled>怼她</button>
+  </div>
+
+  <script>
+    let app, model, audioContext, analyser, currentMouthOpen = 0;
+
+    const MODELS = [
+      // 0: 2K超清无课桌长发少女 Haru（本地离线极速加载）
+      "/models/haru/haru_greeter_t03.model3.json",
+      // 1: 经典水手服同桌少女 Shizuku（本地离线极速加载）
+      "/models/shizuku/shizuku.model.json"
+    ];
+    let currentModelIdx = 0;
+
+    async function loadModel(idx) {
+      const canvas = document.getElementById('live2d-canvas');
+      if (!app) {
+        app = new PIXI.Application({
+          view: canvas,
+          autoStart: true,
+          resizeTo: canvas,
+          backgroundAlpha: 0
+        });
+      }
+      if (model) {
+        app.stage.removeChild(model);
+        model.destroy();
+      }
+
+      model = await PIXI.live2d.Live2DModel.from(MODELS[idx]);
+      app.stage.addChild(model);
+
+      const origW = model.width;
+      const origH = model.height;
+
+      function fitModel() {
+        const w = canvas.clientWidth;
+        const h = canvas.clientHeight;
+        // Haru 全身比例较高，放大聚焦上半身与脸部；Shizuku 为半身比例
+        const ratio = idx === 0 ? 1.38 : 0.95;
+        const scale = Math.min((w * 1.15) / origW, (h * ratio) / origH);
+        model.anchor.set(0.5, 0);
+        model.scale.set(scale);
+        model.x = w / 2;
+        model.y = idx === 0 ? -10 : 10;
+      }
+      fitModel();
+      window.onresize = fitModel;
+
+      model.internalModel.on('beforeModelUpdate', () => {
+        const core = model.internalModel.coreModel;
+        if (core.setParameterValueById) {
+          core.setParameterValueById('ParamMouthOpenY', currentMouthOpen);
+        } else if (core.setParamFloat) {
+          core.setParamFloat('PARAM_MOUTH_OPEN_Y', currentMouthOpen);
+        }
+      });
+    }
+
+    // 暴露给 PyQt 顶部切换按钮调用
+    window.switchAvatar = function() {
+      currentModelIdx = (currentModelIdx + 1) % MODELS.length;
+      loadModel(currentModelIdx);
+    };
+
+    window.addEventListener('mousemove', e => {
+      if (model) model.focus(e.clientX, e.clientY);
+    });
+
+    loadModel(0);
+
+    let pyBridge = null;
+    let timerId = null;
+
+    function typeWriter(text) {
+      const el = document.getElementById("reply-text");
+      if (timerId) clearInterval(timerId);
+      el.innerText = "";
+      let i = 0;
+      timerId = setInterval(() => {
+        if (i < text.length) {
+          el.innerText += text.charAt(i++);
+        } else {
+          clearInterval(timerId);
+          timerId = null;
+        }
+      }, 32);
+    }
+
+    function playAudio(b64) {
+      if (!b64) return;
+      if (!audioContext) audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      if (audioContext.state === "suspended") audioContext.resume();
+
+      const audio = new Audio("data:audio/mp3;base64," + b64);
+      if (!analyser) {
+        analyser = audioContext.createAnalyser();
+        analyser.fftSize = 256;
+      }
+      const src = audioContext.createMediaElementSource(audio);
+      src.connect(analyser);
+      analyser.connect(audioContext.destination);
+
+      const data = new Uint8Array(analyser.frequencyBinCount);
+      function tick() {
+        if (audio.paused || audio.ended) {
+          currentMouthOpen = 0;
+          return;
+        }
+        analyser.getByteFrequencyData(data);
+        const avg = data.reduce((a, b) => a + b, 0) / data.length;
+        currentMouthOpen = Math.min(1.0, (avg / 85.0) * 1.5);
+        requestAnimationFrame(tick);
+      }
+      audio.play().then(tick).catch(err => console.error(err));
+    }
+
+    // 建立与 Python 内存直连通道（无需任何端口与 Web 服务器）
+    if (window.qt && window.qt.webChannelTransport) {
+      new QWebChannel(window.qt.webChannelTransport, (channel) => {
+        pyBridge = channel.objects.bridge;
+
+        pyBridge.statusChanged.connect((jsonStr) => {
+          const s = JSON.parse(jsonStr);
+          document.getElementById("reply-text").innerText = s.text;
+          document.getElementById("btn").disabled = !s.ready;
+        });
+
+        pyBridge.replyReady.connect((jsonStr) => {
+          const d = JSON.parse(jsonStr);
+          document.getElementById("emotion").innerText = `[${d.emotion} ❤️${d.intimacy}%]`;
+          typeWriter(d.reply);
+          playAudio(d.audio);
+          const btn = document.getElementById("btn");
+          const input = document.getElementById("msg");
+          btn.disabled = false;
+          input.focus();
+        });
+
+        pyBridge.notifyReady();
+      });
+    }
+
+    function send() {
+      const input = document.getElementById("msg");
+      const btn = document.getElementById("btn");
+      const text = input.value.trim();
+      if (!text || !pyBridge || btn.disabled) return;
+
+      input.value = "";
+      btn.disabled = true;
+      document.getElementById("reply-text").innerText = "……（白眼思考中）";
+      pyBridge.sendMessage(text);
+    }
+
+    document.getElementById("msg").addEventListener("keydown", e => {
+      if (e.key === "Enter") send();
+    });
+  </script>
+</body>
+</html>
