@@ -79,10 +79,20 @@
     let app, model, audioContext, analyser, currentMouthOpen = 0;
 
     const MODELS = [
-      // 0: 2K超清无课桌长发少女 Haru（本地离线极速加载）
-      "/models/haru/haru_greeter_t03.model3.json",
-      // 1: 经典水手服同桌少女 Shizuku（本地离线极速加载）
-      "/models/shizuku/shizuku.model.json"
+      // 0: Hiyori 桃濑日和（超清 JK 校服同桌白月光）
+      { url: "/models/hiyori/Hiyori.model3.json", ratio: 1.45, offsetY: -12 },
+      // 1: Haru 春（2K 长发温柔学姐）
+      { url: "/models/haru/haru_greeter_t03.model3.json", ratio: 1.38, offsetY: -10 },
+      // 2: Mao 魔法少女（官方 4.0 旗舰角色）
+      { url: "/models/mao/Mao.model3.json", ratio: 1.30, offsetY: -5 },
+      // 3: Hibiki 音无响（日系高校少女）
+      { url: "/models/hibiki/hibiki.model.json", ratio: 1.35, offsetY: -8 },
+      // 4: Shizuku 雫（水手服课桌同桌）
+      { url: "/models/shizuku/shizuku.model.json", ratio: 0.95, offsetY: 10 },
+      // 5: Koharu 小春（Q版萌系桌宠）
+      { url: "/models/koharu/koharu.model.json", ratio: 0.95, offsetY: 10 },
+      // 6: Miku 初音未来
+      { url: "/models/miku/miku.model.json", ratio: 1.0, offsetY: 5 }
     ];
     let currentModelIdx = 0;
 
@@ -101,7 +111,8 @@
         model.destroy();
       }
 
-      model = await PIXI.live2d.Live2DModel.from(MODELS[idx]);
+      const cfg = MODELS[idx];
+      model = await PIXI.live2d.Live2DModel.from(cfg.url);
       app.stage.addChild(model);
 
       const origW = model.width;
@@ -110,13 +121,11 @@
       function fitModel() {
         const w = canvas.clientWidth;
         const h = canvas.clientHeight;
-        // Haru 全身比例较高，放大聚焦上半身与脸部；Shizuku 为半身比例
-        const ratio = idx === 0 ? 1.38 : 0.95;
-        const scale = Math.min((w * 1.15) / origW, (h * ratio) / origH);
+        const scale = Math.min((w * 1.15) / origW, (h * cfg.ratio) / origH);
         model.anchor.set(0.5, 0);
         model.scale.set(scale);
         model.x = w / 2;
-        model.y = idx === 0 ? -10 : 10;
+        model.y = cfg.offsetY;
       }
       fitModel();
       window.onresize = fitModel;

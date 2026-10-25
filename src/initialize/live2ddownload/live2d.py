@@ -1,8 +1,10 @@
-import json
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+
+from .version2clone import version2clone
+from .version3clone import version3clone
 
 
 class live2ddownload:
@@ -21,7 +23,6 @@ class live2ddownload:
             for url, dest in all_tasks.items()
             if not (dest.exists() and dest.stat().st_size > 0)
         }
-
         if not missing:
             print("Live2D assets have existed.")
             return
@@ -34,7 +35,6 @@ class live2ddownload:
             ]
         for fut in as_completed(futures):
             fut.result()
-
         print(f"Finished: {self.models_path}")
         return
 
@@ -73,46 +73,71 @@ class live2ddownload:
 
     def _collect_model_tasks(self) -> dict[str, Path]:
         tasks: dict[str, Path] = {}
+        # Cubism3/4
+        v3_models = [
+            # Hiyori 桃濑日和：官方超清 JK 校服邻家少女（白月光首选）
+            (
+                "hiyori",
+                "https://cdn.jsdelivr.net/gh/Live2D/CubismWebSamples@master/Samples/Resources/Hiyori/",
+                "Hiyori.model3.json",
+            ),
+            # Haru 春：2K 长发温柔学姐
+            (
+                "haru",
+                "https://cdn.jsdelivr.net/gh/guansss/pixi-live2d-display/test/assets/haru/",
+                "haru_greeter_t03.model3.json",
+            ),
+            # Mao 虹色魔法少女：官方 4.0 旗舰高表现力少女
+            (
+                "mao",
+                "https://cdn.jsdelivr.net/gh/Live2D/CubismWebSamples@master/Samples/Resources/Mao/",
+                "Mao.model3.json",
+            ),
+        ]
+        for folder, base_url, entry_json in v3_models:
+            tasks.update(
+                version3clone(
+                    base_url=base_url,
+                    entry_json=entry_json,
+                    save_path=self.models_path / folder,
+                    fetch_fn=self._fetch_file,
+                )
+            )
+        # Cubism2
+        v2_models = [
+            # Shizuku 雫：经典水手服课桌同桌少女
+            (
+                "shizuku",
+                "https://cdn.jsdelivr.net/gh/guansss/pixi-live2d-display/test/assets/shizuku/",
+                "shizuku.model.json",
+            ),
+            # Hibiki 音无响：日系高校少女
+            (
+                "hibiki",
+                "https://cdn.jsdelivr.net/npm/live2d-widget-model-hibiki@1.0.5/assets/",
+                "hibiki.model.json",
+            ),
+            # Koharu 小春：Q版萌系双马尾桌宠
+            (
+                "koharu",
+                "https://cdn.jsdelivr.net/npm/live2d-widget-model-koharu@1.0.5/assets/",
+                "koharu.model.json",
+            ),
+            # Miku 初音未来：经典双马尾歌姬
+            (
+                "miku",
+                "https://cdn.jsdelivr.net/npm/live2d-widget-model-miku@1.0.5/assets/",
+                "miku.model.json",
+            ),
+        ]
+        for folder, base_url, entry_json in v2_models:
+            tasks.update(
+                version2clone(
+                    base_url=base_url,
+                    entry_json=entry_json,
+                    save_path=self.models_path / folder,
+                    fetch_fn=self._fetch_file,
+                )
+            )
 
-        # Haru (Cubism 4)
-        haru_base = (
-            "https://cdn.jsdelivr.net/gh/guansss/pixi-live2d-display/test/assets/haru/"
-        )
-        haru_dir = self.models_path / "haru"
-        haru_json_path = haru_dir / "haru_greeter_t03.model3.json"
-        self._fetch_file(haru_base + "haru_greeter_t03.model3.json", haru_json_path)
-
-        haru_cfg = json.loads(haru_json_path.read_text(encoding="utf-8"))
-        refs = haru_cfg["FileReferences"]
-        if "DisplayInfo" in refs:
-            refs.pop("DisplayInfo", None)
-            haru_json_path.write_text(json.dumps(haru_cfg, indent=2), encoding="utf-8")
-        for rel in [refs["Moc"], refs["Physics"], refs["Pose"], *refs["Textures"]]:
-            tasks[haru_base + rel] = haru_dir / rel
-        for exp in refs.get("Expressions", []):
-            tasks[haru_base + exp["File"]] = haru_dir / exp["File"]
-        for motion_group in refs.get("Motions", {}).values():
-            for m in motion_group:
-                tasks[haru_base + m["File"]] = haru_dir / m["File"]
-
-        # Shizuku (Cubism 2)
-        shz_base = "https://cdn.jsdelivr.net/gh/guansss/pixi-live2d-display/test/assets/shizuku/"
-        shz_dir = self.models_path / "shizuku"
-        shz_json_path = shz_dir / "shizuku.model.json"
-        self._fetch_file(shz_base + "shizuku.model.json", shz_json_path)
-        shz_cfg = json.loads(shz_json_path.read_text(encoding="utf-8"))
-        for rel in [
-            shz_cfg["model"],
-            shz_cfg["physics"],
-            shz_cfg["pose"],
-            *shz_cfg["textures"],
-        ]:
-            tasks[shz_base + rel] = shz_dir / rel
-        for exp in shz_cfg.get("expressions", []):
-            tasks[shz_base + exp["file"]] = shz_dir / exp["file"]
-        for motion_group in shz_cfg.get("motions", {}).values():
-            for m in motion_group:
-                tasks[shz_base + m["file"]] = shz_dir / m["file"]
-                if "sound" in m:
-                    tasks[shz_base + m["sound"]] = shz_dir / m["sound"]
         return tasks
