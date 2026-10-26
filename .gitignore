@@ -11,4 +11,4 @@ wheels/
 
 .model
 web/models
-saves/**/checkpoint-*/
+saves

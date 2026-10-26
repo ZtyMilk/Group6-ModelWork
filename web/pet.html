@@ -16,26 +16,10 @@
       font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
     }
 
-    /* 头顶对话气泡 */
-    .bubble {
-      position: absolute; top: 6px; left: 50%; transform: translateX(-50%);
-      width: 94%; padding: 10px 14px;
-      background: rgba(20, 22, 35, 0.86);
-      border: 1px solid rgba(255, 133, 162, 0.55);
-      border-radius: 14px; color: #fff; font-size: 13px; line-height: 1.45;
-      box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
-      z-index: 10;
-      word-break: break-word;
-    }
-    .badge {
-      display: inline-block; font-size: 11px; color: #ff94b4;
-      margin-right: 6px; font-weight: bold;
-    }
-
     /* Live2D 透明画布 */
     #live2d-canvas {
-      position: absolute; top: 68px; left: 0;
-      width: 100%; height: calc(100% - 114px);
+      position: absolute; top: 0; left: 0;
+      width: 100%; height: calc(100% - 46px);
       z-index: 2;
     }
 
@@ -63,11 +47,6 @@
   </style>
 </head>
 <body>
-  <div class="bubble">
-    <span class="badge" id="emotion">[傲娇 ❤️60%]</span>
-    <span id="reply-text">正在唤醒KIKI……</span>
-  </div>
-
   <canvas id="live2d-canvas"></canvas>
 
   <div class="mini-input">
@@ -80,19 +59,19 @@
 
     const MODELS = [
       // 0: Hiyori 桃濑日和（超清 JK 校服同桌白月光）
-      { url: "/models/hiyori/Hiyori.model3.json", ratio: 1.45, offsetY: -12 },
+      { url: "/models/hiyori/Hiyori.model3.json", ratio: 0.92, offsetY: 0 },
       // 1: Haru 春（2K 长发温柔学姐）
-      { url: "/models/haru/haru_greeter_t03.model3.json", ratio: 1.38, offsetY: -10 },
+      { url: "/models/haru/haru_greeter_t03.model3.json", ratio: 0.92, offsetY: 0 },
       // 2: Mao 魔法少女（官方 4.0 旗舰角色）
-      { url: "/models/mao/Mao.model3.json", ratio: 1.30, offsetY: -5 },
+      { url: "/models/mao/Mao.model3.json", ratio: 0.90, offsetY: 0 },
       // 3: Hibiki 音无响（日系高校少女）
-      { url: "/models/hibiki/hibiki.model.json", ratio: 1.35, offsetY: -8 },
+      { url: "/models/hibiki/hibiki.model.json", ratio: 0.92, offsetY: 0 },
       // 4: Shizuku 雫（水手服课桌同桌）
-      { url: "/models/shizuku/shizuku.model.json", ratio: 0.95, offsetY: 10 },
+      { url: "/models/shizuku/shizuku.model.json", ratio: 0.88, offsetY: 0 },
       // 5: Koharu 小春（Q版萌系桌宠）
-      { url: "/models/koharu/koharu.model.json", ratio: 0.95, offsetY: 10 },
+      { url: "/models/koharu/koharu.model.json", ratio: 0.88, offsetY: 0 },
       // 6: Miku 初音未来
-      { url: "/models/miku/miku.model.json", ratio: 1.0, offsetY: 5 }
+      { url: "/models/miku/miku.model.json", ratio: 0.90, offsetY: 0 }
     ];
     let currentModelIdx = 0;
 
@@ -121,23 +100,56 @@
       function fitModel() {
         const w = canvas.clientWidth;
         const h = canvas.clientHeight;
-        const scale = Math.min((w * 1.15) / origW, (h * cfg.ratio) / origH);
-        model.anchor.set(0.5, 0);
+        const scale = Math.min(w / origW, h / origH) * cfg.ratio;
+        model.anchor.set(0.5, 0.5);
         model.scale.set(scale);
         model.x = w / 2;
-        model.y = cfg.offsetY;
+        model.y = h / 2 + cfg.offsetY;
       }
       fitModel();
       window.onresize = fitModel;
+      startIdle(model);
 
+      const born = performance.now();
       model.internalModel.on('beforeModelUpdate', () => {
         const core = model.internalModel.coreModel;
+        const t = (performance.now() - born) / 1000;
+        const breath = (Math.sin(t * 1.6) + 1) / 2;
+        const blink = Math.pow(Math.max(0, Math.sin(t * 0.55)), 18);
         if (core.setParameterValueById) {
           core.setParameterValueById('ParamMouthOpenY', currentMouthOpen);
+          core.setParameterValueById('ParamBreath', breath);
+          if (currentMouthOpen < 0.05) {
+            core.setParameterValueById('ParamEyeLOpen', 1 - blink);
+            core.setParameterValueById('ParamEyeROpen', 1 - blink);
+          }
         } else if (core.setParamFloat) {
           core.setParamFloat('PARAM_MOUTH_OPEN_Y', currentMouthOpen);
+          core.setParamFloat('PARAM_BREATH', breath);
+          if (currentMouthOpen < 0.05) {
+            core.setParamFloat('PARAM_EYE_L_OPEN', 1 - blink);
+            core.setParamFloat('PARAM_EYE_R_OPEN', 1 - blink);
+          }
         }
       });
+    }
+
+    function startIdle(live2d) {
+      const motionManager = live2d.internalModel && live2d.internalModel.motionManager;
+      const groups = motionManager && motionManager.definitions
+        ? Object.keys(motionManager.definitions)
+        : [];
+      const idleGroup = ["Idle", "idle", ""].find((name) => groups.includes(name));
+      if (!idleGroup) return;
+      const play = () => {
+        if (model !== live2d) return;
+        const motions = motionManager.definitions[idleGroup] || [];
+        const index = motions.length ? Math.floor(Math.random() * motions.length) : 0;
+        Promise.resolve(live2d.motion(idleGroup, index)).finally(() => {
+          if (model === live2d) setTimeout(play, 400);
+        });
+      };
+      play();
     }
 
     // 暴露给 PyQt 顶部切换按钮调用
@@ -153,22 +165,6 @@
     loadModel(0);
 
     let pyBridge = null;
-    let timerId = null;
-
-    function typeWriter(text) {
-      const el = document.getElementById("reply-text");
-      if (timerId) clearInterval(timerId);
-      el.innerText = "";
-      let i = 0;
-      timerId = setInterval(() => {
-        if (i < text.length) {
-          el.innerText += text.charAt(i++);
-        } else {
-          clearInterval(timerId);
-          timerId = null;
-        }
-      }, 32);
-    }
 
     function playAudio(b64) {
       if (!b64) return;
@@ -205,14 +201,11 @@
 
         pyBridge.statusChanged.connect((jsonStr) => {
           const s = JSON.parse(jsonStr);
-          document.getElementById("reply-text").innerText = s.text;
           document.getElementById("btn").disabled = !s.ready;
         });
 
         pyBridge.replyReady.connect((jsonStr) => {
           const d = JSON.parse(jsonStr);
-          document.getElementById("emotion").innerText = `[${d.emotion} ❤️${d.intimacy}%]`;
-          typeWriter(d.reply);
           playAudio(d.audio);
           const btn = document.getElementById("btn");
           const input = document.getElementById("msg");
@@ -232,7 +225,6 @@
 
       input.value = "";
       btn.disabled = true;
-      document.getElementById("reply-text").innerText = "……（白眼思考中）";
       pyBridge.sendMessage(text);
     }
 

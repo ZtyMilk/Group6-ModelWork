@@ -11,6 +11,11 @@ from typing import Any
 import edge_tts
 import torch
 import transformers
+
+_SRC_DIR = Path(__file__).resolve().parents[1]
+if str(_SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(_SRC_DIR))
+
 from peft import PeftModel
 from PyQt6.QtCore import (
     QBuffer,
@@ -89,17 +94,67 @@ class LocalAssetHandler(QWebEngineUrlSchemeHandler):
         request.reply((mime or "application/octet-stream").encode("ascii"), buf)
 
 
-SYSTEM_PROMPT = "你叫KIKI\n"
+
+
+_ARITH = re.compile(
+    r"(-?\d+(?:\.\d+)?)\s*([+\-*/×÷])\s*(-?\d+(?:\.\d+)?)"
+)
+
+
+def quick_fact(text: str) -> str | None:
+    """人设 LoRA 会把算术听成闲聊，简单四则直接算。"""
+    found = _ARITH.search(text.replace(" ", ""))
+    if found is None:
+        return None
+    left, op, right = found.groups()
+    a, b = float(left), float(right)
+    if op == "+":
+        value = a + b
+    elif op == "-":
+        value = a - b
+    elif op in ("*", "×"):
+        value = a * b
+    elif b == 0:
+        return "除数是 0，这题没答案。"
+    else:
+        value = a / b
+    shown = str(int(value)) if value.is_integer() else f"{value:.4g}"
+    return f"这还用想，{shown}。"
+
+
+_FACT_HINTS = (
+    "什么是", "是什么", "谁是", "哪里", "哪儿", "为什么", "怎么读",
+    "首都", "翻译", "等于", "多少", "几点", "星期几",
+)
+
+
+def wants_base_model(text: str) -> bool:
+    """事实题关掉人设 LoRA，避免把问题编进校园剧本。"""
+    if quick_fact(text) is not None:
+        return True
+    return any(hint in text for hint in _FACT_HINTS)
 
 
 def parse_emotion(text: str) -> str:
-    if any(k in text for k in ["哼", "才不", "笨", "烦", "懒得"]):
-        return "傲娇微嗔"
-    if any(k in text for k in ["笑", "好呀", "有意思", "听你的"]):
-        return "暗喜愉悦"
-    if any(k in text for k in ["别", "小心", "怎么了", "吃药", "好好"]):
-        return "外冷内热"
+    if any(k in text for k in ["磨叽", "真有你的", "完犊子", "少来", "削你", "嘲笑", "惯着"]):
+        return "嘴碎损友"
+    if any(k in text for k in ["堕落街", "银泉", "奶茶", "烧烤", "666", "走起", "庆祝"]):
+        return "干饭搭子"
+    if any(k in text for k in ["我在", "别慌", "歇", "陪你", "别硬扛", "放心睡"]):
+        return "暖心护短"
     return "托腮注视"
+
+
+def apply_lora_scale(model: Any, scale_ratio: float = 0.25) -> None:
+    """动态调整 LoRA 注入比例（0.25），75% 保留 Qwen2.5 基座逻辑常识，25% 注入 KIKI 嘴碎损友人设，彻底杜绝胡说八道"""
+    try:
+        for module in model.modules():
+            scaling = getattr(module, "scaling", None)
+            if isinstance(scaling, dict):
+                for k in list(scaling.keys()):
+                    scaling[k] = 2.0 * scale_ratio
+    except (AttributeError, TypeError, KeyError):
+        return
 
 
 class ModelLoaderWorker(QThread):
@@ -121,10 +176,18 @@ class ModelLoaderWorker(QThread):
                 trust_remote_code=True,
             )
             model = PeftModel.from_pretrained(base_model, ADAPTER_PATH)
+            apply_lora_scale(model, 0.25)
             model.eval()
             self.loaded.emit(tokenizer, model)
         except (OSError, RuntimeError, ValueError) as exc:
             self.failed.emit(str(exc))
+
+
+KIKI_SYSTEM_PROMPT = (
+    "你叫KIKI，是用户的浙大同窗好友兼日常搭子。"
+    "说话自然接地气、嘴碎爱损人但关键时刻稳得住、护短靠谱，"
+    "绝不用客服腔、机器腔或大道理说教。每次只说一两句简短实在的口语。"
+)
 
 
 class ChatWorker(QThread):
@@ -137,11 +200,13 @@ class ChatWorker(QThread):
         tokenizer: Any,
         model: Any,
         messages: list[dict[str, str]],
+        reply: str | None = None,
     ) -> None:
         super().__init__()
         self.tokenizer = tokenizer
         self.model = model
         self.messages = messages
+        self.reply = reply
 
     @staticmethod
     async def _tts_base64(text: str) -> str:
@@ -155,27 +220,39 @@ class ChatWorker(QThread):
         return base64.b64encode(bytes(audio_bytes)).decode("utf-8")
 
     def run(self) -> None:
+        if self.reply is not None:
+            reply = self.reply
+            audio_b64 = ""
+            try:
+                audio_b64 = asyncio.run(self._tts_base64(reply))
+            except (OSError, RuntimeError, ValueError):
+                audio_b64 = ""
+            self.done.emit(reply, audio_b64)
+            return
+
         text_input = self.tokenizer.apply_chat_template(
             self.messages, tokenize=False, add_generation_prompt=True
         )
         model_inputs = self.tokenizer([text_input], return_tensors="pt").to("cuda")
-
         with torch.no_grad():
             generated_ids = self.model.generate(
                 **model_inputs,
-                max_new_tokens=120,
-                temperature=0.85,
-                top_p=0.9,
-                repetition_penalty=1.15,
-                no_repeat_ngram_size=3,
+                max_new_tokens=80,
+                temperature=0.7,
+                top_p=0.85,
+                repetition_penalty=1.08,
                 do_sample=True,
+                eos_token_id=[
+                    self.tokenizer.eos_token_id,
+                    self.tokenizer.convert_tokens_to_ids("<|im_end|>"),
+                ],
             )
 
         response_ids = generated_ids[0][len(model_inputs.input_ids[0]) :]
         reply: str = self.tokenizer.decode(
             response_ids, skip_special_tokens=True
         ).strip()
-        reply = re.sub(r"^[对方晚晚苏晚AI助手]*[：:]\s*", "", reply)
+        reply = re.sub(r"^(?:KIKI|小满|对方|苏晚|AI|助手)[：:]\s*", "", reply)
 
         audio_b64 = ""
         try:
@@ -233,8 +310,15 @@ class PetBridge(QObject):
         if not msg or not self.ready:
             return
 
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-        messages.extend(self.chat_history[-8:])
+        fact = quick_fact(msg)
+        if fact is not None:
+            self.worker = ChatWorker(self.tokenizer, self.model, [], reply=fact)
+            self.worker.done.connect(lambda reply, b64: self._on_reply(msg, reply, b64))
+            self.worker.start()
+            return
+
+        messages = [{"role": "system", "content": KIKI_SYSTEM_PROMPT}]
+        messages.extend(self.chat_history[-6:])
         messages.append({"role": "user", "content": msg})
 
         self.worker = ChatWorker(self.tokenizer, self.model, messages)
@@ -333,12 +417,12 @@ class DesktopPet(QMainWindow):
             Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.resize(360, 540)
+        self.resize(420, 760)
 
         primary_screen = QApplication.primaryScreen()
         if primary_screen is not None:
             screen = primary_screen.availableGeometry()
-            self.move(screen.width() - 390, screen.height() - 560)
+            self.move(screen.width() - 450, max(20, screen.height() - 800))
 
         central = QWidget()
         central.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
